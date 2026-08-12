@@ -32,10 +32,13 @@ client.on('interactionCreate', async (interaction) => {
         const member = await guild.members.fetch(discordUserId);
 
         if (action === 'approve') {
-            const roleId = process.env.ROLE_APPROVED_ID;
-            await member.roles.add(roleId);
+            // Tách các ID Role bởi dấu phẩy
+            const roleIds = process.env.ROLE_APPROVED_ID.split(',').map(id => id.trim());
+            
+            // Add tất cả Role cùng lúc
+            await member.roles.add(roleIds);
 
-            // Đổi nút thành trạng thái Đã duyệt
+            // Cập nhật giao diện nút bấm
             const disabledRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                     .setCustomId('approved_done')
@@ -46,6 +49,7 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.update({ components: [disabledRow] });
             await interaction.followUp({ content: `✅ Đã cấp Role thành công cho <@${discordUserId}>!`, ephemeral: true });
+            return;
 
         } else if (action === 'reject') {
             if (process.env.ROLE_REJECTED_ID) {
@@ -63,10 +67,13 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.update({ components: [disabledRow] });
             await interaction.followUp({ content: `❌ Đã từ chối đơn của <@${discordUserId}>.`, ephemeral: true });
+            return;
         }
     } catch (error) {
         console.error(error);
-        await interaction.reply({ content: `❌ Lỗi: Không tìm thấy thành viên hoặc Bot thiếu quyền cấp Role!`, ephemeral: true });
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: `❌ Lỗi: Không tìm thấy thành viên hoặc Bot thiếu quyền cấp Role!`, ephemeral: true });
+        }
     }
 });
 
@@ -95,12 +102,11 @@ app.post('/submit-form', async (req, res) => {
             .setStyle(ButtonStyle.Danger)
     );
 
-    // Chuẩn bị nội dung Embed
     const embed = {
-        title: '📋 ĐƠN DĂNG KÝ MỚI',
+        title: '📋 ĐƠN ĐĂNG KÝ MỚI',
         fields: [
             { name: 'Người gửi', value: `${username} (<@${discordUserId}>)`, inline: false },
-            ...answers.map(a => ({ name: a.question, value: a.answer || 'N/A', inline: false }))
+            ...answers.map(a => ({ name: a.question, value: String(a.answer || 'N/A'), inline: false }))
         ],
         color: 0x3498db,
         timestamp: new Date()
