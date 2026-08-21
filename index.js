@@ -119,9 +119,17 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       let rolesToAdd = [];
-      if (targetRoleId && /^\d{17,19}$/.test(targetRoleId) && guild.roles.cache.has(targetRoleId)) {
-        rolesToAdd.push(targetRoleId);
-      } else {
+
+      // Kiểm tra xem nút bấm có chứa ID Role chọn riêng từ Form không
+      if (targetRoleId && /^\d{17,19}$/.test(targetRoleId)) {
+        const matchedRole = await guild.roles.fetch(targetRoleId).catch(() => null);
+        if (matchedRole) {
+          rolesToAdd.push(matchedRole.id);
+        }
+      }
+
+      // Nếu không có Role chọn riêng trên nút -> Mới lấy danh sách mặc định từ biến môi trường
+      if (rolesToAdd.length === 0) {
         rolesToAdd = parseRoleIds(process.env.ROLE_APPROVED_ID);
       }
 
@@ -234,11 +242,14 @@ app.post('/submit-form', async (req, res) => {
       return res.status(500).json({ error: 'Channel không hợp lệ' });
     }
 
-    // Kiểm tra chính xác ID Role trong câu trả lời bằng cache của Guild
+    // Tải danh sách Role thực tế từ Discord API thay vì dùng cache
+    const guildRoles = await guild.roles.fetch().catch(() => null);
+
     let selectedRoleId = '';
     for (const item of answers) {
       const ans = String(item.answer || '').trim();
-      if (/^\d{17,19}$/.test(ans) && guild.roles.cache.has(ans)) {
+      // Kiểm tra câu trả lời có phải ID Role hợp lệ và có trong Server không
+      if (/^\d{17,19}$/.test(ans) && guildRoles && guildRoles.has(ans)) {
         selectedRoleId = ans;
         break;
       }
