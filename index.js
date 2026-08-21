@@ -45,7 +45,6 @@ async function getGuild() {
   return guild;
 }
 
-// Cập nhật giao diện nút bấm (Disable sau khi xử lý)
 async function updateButtonState(interaction, label, style) {
   const disabledRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -65,19 +64,6 @@ client.once('ready', () => {
   if (!cachedGuild) {
     console.warn('⚠️ GUILD_ID không hợp lệ hoặc bot chưa được add vào server');
   }
-  
-  const approvedRoles = parseRoleIds(process.env.ROLE_APPROVED_ID);
-  const rejectedRoles = parseRoleIds(process.env.ROLE_REJECTED_ID);
-  
-  if (approvedRoles.length === 0) {
-    console.warn('⚠️ ROLE_APPROVED_ID chưa được cấu hình hoặc rỗng');
-  } else {
-    console.log(`✅ Approved roles mặc định: ${approvedRoles.join(', ')}`);
-  }
-  
-  if (rejectedRoles.length > 0) {
-    console.log(`✅ Rejected roles: ${rejectedRoles.join(', ')}`);
-  }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -90,7 +76,6 @@ client.on('interactionCreate', async (interaction) => {
   if (!discordUserId) return;
 
   try {
-    // Hoãn interaction ngay lập tức để tránh lỗi timeout 3s
     await interaction.deferUpdate();
 
     const guild = await getGuild();
@@ -120,16 +105,19 @@ client.on('interactionCreate', async (interaction) => {
 
       let rolesToAdd = [];
 
-      // Kiểm tra xem nút bấm có chứa ID Role chọn riêng từ Form không
+      // SỬA 1: Nếu nút bấm CÓ chứa targetRoleId -> CHỈ cấp duy nhất Role đó, tuyệt đối không lấy danh sách mặc định
       if (targetRoleId && /^\d{17,19}$/.test(targetRoleId)) {
         const matchedRole = await guild.roles.fetch(targetRoleId).catch(() => null);
         if (matchedRole) {
           rolesToAdd.push(matchedRole.id);
+        } else {
+          return interaction.followUp({
+            content: `❌ Role có ID \`${targetRoleId}\` không tồn tại trong Server!`,
+            ephemeral: true
+          });
         }
-      }
-
-      // Nếu không có Role chọn riêng trên nút -> Mới lấy danh sách mặc định từ biến môi trường
-      if (rolesToAdd.length === 0) {
+      } else {
+        // Chỉ khi nút bấm hoàn toàn không chứa targetRoleId mới dùng danh sách mặc định
         rolesToAdd = parseRoleIds(process.env.ROLE_APPROVED_ID);
       }
 
@@ -140,7 +128,6 @@ client.on('interactionCreate', async (interaction) => {
         });
       }
 
-      // Thực hiện cấp Role
       await member.roles.add(rolesToAdd);
 
       await updateButtonState(
@@ -197,7 +184,6 @@ app.post('/submit-form', async (req, res) => {
     const { secret, username, discordUserId, answers = [] } = req.body || {};
 
     if (secret !== process.env.WEBHOOK_SECRET) {
-      console.warn('❌ Secret không khớp!');
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -208,10 +194,8 @@ app.post('/submit-form', async (req, res) => {
 
     let finalUserId = discordUserId;
 
-    // Tìm kiếm Member theo Username nếu thiếu ID
     if (!finalUserId || !/^\d{17,19}$/.test(finalUserId)) {
       const cleanInput = String(username || '').toLowerCase().replace('@', '').trim();
-      console.log(`⚠️ Đang tìm Member theo tên: "${cleanInput}"`);
       
       try {
         const searchedMembers = await guild.members.search({ query: cleanInput, limit: 10 });
@@ -242,18 +226,25 @@ app.post('/submit-form', async (req, res) => {
       return res.status(500).json({ error: 'Channel không hợp lệ' });
     }
 
-    // Tải danh sách Role thực tế từ Discord API thay vì dùng cache
     const guildRoles = await guild.roles.fetch().catch(() => null);
 
     let selectedRoleId = '';
+    // SỬA 2: Dùng match(/\d{17,19}/) để bóc tách ID Role ngay cả khi câu trả lời có chứa thêm văn bản khác
     for (const item of answers) {
       const ans = String(item.answer || '').trim();
-      // Kiểm tra câu trả lời có phải ID Role hợp lệ và có trong Server không
-      if (/^\d{17,19}$/.test(ans) && guildRoles && guildRoles.has(ans)) {
-        selectedRoleId = ans;
-        break;
+      const extractedMatch = ans.match(/\d{17,19}/);
+      
+      if (extractedMatch) {
+        const possibleRoleId = extractedMatch[0];
+        // Chỉ chấp nhận nếu ID này thực sự tồn tại trong Server
+        if (guildRoles && guildRoles.has(possibleRoleId)) {
+          selectedRoleId = possibleRoleId;
+          break;
+        }
       }
     }
+
+    console.log(`📌 ID Role được tìm thấy từ Form: "${selectedRoleId || 'Không có (Sử dụng mặc định)'}"`);
 
     const approveCustomId = selectedRoleId 
       ? `approve_${finalUserId}_${selectedRoleId}` 
@@ -293,8 +284,6 @@ app.post('/submit-form', async (req, res) => {
     }
 
     await channel.send({ embeds: [embed], components: [row] });
-    console.log('✅ Gửi đơn đăng ký thành công!');
-
     return res.status(200).json({ success: true, message: 'Đã gửi đơn thành công' });
   } catch (error) {
     console.error('❌ Lỗi khi gửi form:', error);
@@ -310,7 +299,6 @@ if (!process.env.DISCORD_TOKEN) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server đang chạy trên cổng ${PORT}`);
-  console.log(`📡 Endpoint: POST http://localhost:${PORT}/submit-form`);
   client.login(process.env.DISCORD_TOKEN);
 });
 
