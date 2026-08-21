@@ -5,7 +5,8 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  EmbedBuilder
+  EmbedBuilder,
+  PermissionFlagsBits
 } = require('discord.js');
 
 const app = express();
@@ -40,13 +41,12 @@ async function getGuild() {
   }
 
   const guild = await client.guilds.fetch(process.env.GUILD_ID).catch(() => null);
-  if (guild) {
-    cachedGuild = guild;  // Cập nhật cache nếu fetch thành công
-  }
+  if (guild) cachedGuild = guild;
   return guild;
 }
 
-async function disableButtons(interaction, label, style) {
+// Cập nhật giao diện nút bấm (Disable sau khi xử lý)
+async function updateButtonState(interaction, label, style) {
   const disabledRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('done')
@@ -55,26 +55,24 @@ async function disableButtons(interaction, label, style) {
       .setDisabled(true)
   );
 
-  await interaction.update({ components: [disabledRow] });
+  await interaction.editReply({ components: [disabledRow] });
 }
 
 client.once('ready', () => {
   console.log(`✅ Bot đã đăng nhập thành công: ${client.user.tag}`);
   
-  // Cache guild
   cachedGuild = client.guilds.cache.get(process.env.GUILD_ID);
   if (!cachedGuild) {
-    console.warn('⚠️  GUILD_ID không hợp lệ hoặc bot chưa được add vào server');
+    console.warn('⚠️ GUILD_ID không hợp lệ hoặc bot chưa được add vào server');
   }
   
-  // Validate role IDs
   const approvedRoles = parseRoleIds(process.env.ROLE_APPROVED_ID);
   const rejectedRoles = parseRoleIds(process.env.ROLE_REJECTED_ID);
   
   if (approvedRoles.length === 0) {
-    console.warn('⚠️  ROLE_APPROVED_ID chưa được cấu hình hoặc rỗng');
+    console.warn('⚠️ ROLE_APPROVED_ID chưa được cấu hình hoặc rỗng');
   } else {
-    console.log(`✅ Approved roles: ${approvedRoles.join(', ')}`);
+    console.log(`✅ Approved roles mặc định: ${approvedRoles.join(', ')}`);
   }
   
   if (rejectedRoles.length > 0) {
@@ -88,67 +86,63 @@ client.on('interactionCreate', async (interaction) => {
   const parts = interaction.customId.split('_');
   if (parts.length < 2) return;
 
-  const [action, discordUserId] = parts;
+  const [action, discordUserId, targetRoleId] = parts;
   if (!discordUserId) return;
 
   try {
+    // Hoãn interaction ngay lập tức để tránh lỗi timeout 3s
+    await interaction.deferUpdate();
+
     const guild = await getGuild();
     if (!guild) {
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: '❌ Không tìm thấy Server Discord hoặc GUILD_ID không hợp lệ!',
-          ephemeral: true
-        });
-      }
-      return;
+      return interaction.followUp({
+        content: '❌ Không tìm thấy Server Discord hoặc GUILD_ID không hợp lệ!',
+        ephemeral: true
+      });
     }
 
     const member = await guild.members.fetch(discordUserId).catch(() => null);
     if (!member) {
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: '❌ Không tìm thấy thành viên trong server hoặc ID không hợp lệ!',
-          ephemeral: true
-        });
-      }
-      return;
+      return interaction.followUp({
+        content: '❌ Không tìm thấy thành viên trong server!',
+        ephemeral: true
+      });
     }
 
     if (action === 'approve') {
-      const approvedRoleIds = parseRoleIds(process.env.ROLE_APPROVED_ID);
-
-      if (approvedRoleIds.length === 0) {
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: '❌ ROLE_APPROVED_ID chưa được cấu hình!',
-            ephemeral: true
-          });
-        }
-        return;
-      }
-
-      // Kiểm tra quyền bot trước khi assign role
       const botMember = await guild.members.fetchMe();
-      if (!botMember.permissions.has('ManageRoles')) {
-        console.error('❌ Bot thiếu quyền ManageRoles!');
-        if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: '❌ Bot thiếu quyền Manage Roles để cấp role!',
-            ephemeral: true
-          });
-        }
-        return;
+      if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+        return interaction.followUp({
+          content: '❌ Bot thiếu quyền Manage Roles để cấp role!',
+          ephemeral: true
+        });
       }
 
-      await member.roles.add(approvedRoleIds);
-      await disableButtons(
+      let rolesToAdd = [];
+      if (targetRoleId && /^\d{17,19}$/.test(targetRoleId) && guild.roles.cache.has(targetRoleId)) {
+        rolesToAdd.push(targetRoleId);
+      } else {
+        rolesToAdd = parseRoleIds(process.env.ROLE_APPROVED_ID);
+      }
+
+      if (rolesToAdd.length === 0) {
+        return interaction.followUp({
+          content: '❌ Không tìm thấy ID Role hợp lệ để cấp!',
+          ephemeral: true
+        });
+      }
+
+      // Thực hiện cấp Role
+      await member.roles.add(rolesToAdd);
+
+      await updateButtonState(
         interaction,
         `Đã duyệt bởi ${interaction.user.username}`,
         ButtonStyle.Success
       );
 
       await interaction.followUp({
-        content: `✅ Đã cấp Role thành công cho <@${discordUserId}>!`,
+        content: `✅ Đã cấp Role (${rolesToAdd.join(', ')}) cho <@${discordUserId}>!`,
         ephemeral: true
       });
       return;
@@ -161,7 +155,7 @@ client.on('interactionCreate', async (interaction) => {
         await member.roles.add(rejectedRoleIds);
       }
 
-      await disableButtons(
+      await updateButtonState(
         interaction,
         `Đã từ chối bởi ${interaction.user.username}`,
         ButtonStyle.Danger
@@ -174,13 +168,16 @@ client.on('interactionCreate', async (interaction) => {
       return;
     }
   } catch (error) {
-    console.error('Lỗi khi xử lý interaction:', error);
+    console.error('❌ Lỗi khi xử lý interaction:', error);
+    
+    const errorMessage = error.code === 50013 
+      ? '❌ Vị trí Role của Bot đứng dưới Role cần cấp trong Server Settings!'
+      : '❌ Đã xảy ra lỗi hệ thống khi xử lý yêu cầu.';
 
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: '❌ Lỗi: Bot không thể cấp Role hoặc thiếu quyền Manage Roles!',
-        ephemeral: true
-      });
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp({ content: errorMessage, ephemeral: true }).catch(() => {});
+    } else {
+      await interaction.reply({ content: errorMessage, ephemeral: true }).catch(() => {});
     }
   }
 });
@@ -192,50 +189,39 @@ app.post('/submit-form', async (req, res) => {
     const { secret, username, discordUserId, answers = [] } = req.body || {};
 
     if (secret !== process.env.WEBHOOK_SECRET) {
-      console.warn('❌ Secret không match. Nhận:', secret, 'Kỳ vọng:', process.env.WEBHOOK_SECRET);
+      console.warn('❌ Secret không khớp!');
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    // Lấy guild
     const guild = await getGuild();
     if (!guild) {
-      console.error('❌ Không tìm thấy Guild');
       return res.status(500).json({ error: 'Không tìm thấy Guild' });
     }
 
     let finalUserId = discordUserId;
 
-    // Nếu không có ID dạng số, tiến hành tìm kiếm thông minh theo Username/Nickname
+    // Tìm kiếm Member theo Username nếu thiếu ID
     if (!finalUserId || !/^\d{17,19}$/.test(finalUserId)) {
-      console.log(`⚠️ discordUserId không có. Bắt đầu tìm Member theo tên: "${username}"`);
+      const cleanInput = String(username || '').toLowerCase().replace('@', '').trim();
+      console.log(`⚠️ Đang tìm Member theo tên: "${cleanInput}"`);
       
       try {
-        // Tải TOÀN BỘ member trong server về (không giới hạn 1000 người)
-        const members = await guild.members.fetch({ force: true });
-        const cleanInput = String(username || '').toLowerCase().replace('@', '').trim();
-
-        const foundMember = members.find(m => {
-          const uName = m.user.username ? m.user.username.toLowerCase() : '';
-          const gName = m.user.globalName ? m.user.globalName.toLowerCase() : '';
-          const nick = m.nickname ? m.nickname.toLowerCase() : '';
-
-          // So sánh khớp với Username gốc, Global Name hoặc Nickname trong server
-          return uName === cleanInput || gName === cleanInput || nick === cleanInput;
-        });
+        const searchedMembers = await guild.members.search({ query: cleanInput, limit: 10 });
+        const foundMember = searchedMembers.find(m => 
+          m.user.username.toLowerCase() === cleanInput ||
+          (m.user.globalName && m.user.globalName.toLowerCase() === cleanInput) ||
+          (m.nickname && m.nickname.toLowerCase() === cleanInput)
+        );
 
         if (foundMember) {
           finalUserId = foundMember.id;
-          console.log(`✅ Tìm thấy Member: ${foundMember.user.tag} (ID: ${finalUserId})`);
-        } else {
-          console.warn(`⚠️ Không tìm thấy Member nào khớp với tên: "${cleanInput}"`);
         }
       } catch (err) {
-        console.error('❌ Lỗi khi quét danh sách members:', err.message);
+        console.error('❌ Lỗi khi tìm kiếm member:', err.message);
       }
     }
 
     if (!finalUserId) {
-      console.error('❌ Không tìm thấy finalUserId');
       return res.status(400).json({ error: 'Không tìm thấy Member trong Server Discord!' });
     }
 
@@ -248,9 +234,23 @@ app.post('/submit-form', async (req, res) => {
       return res.status(500).json({ error: 'Channel không hợp lệ' });
     }
 
+    // Kiểm tra chính xác ID Role trong câu trả lời bằng cache của Guild
+    let selectedRoleId = '';
+    for (const item of answers) {
+      const ans = String(item.answer || '').trim();
+      if (/^\d{17,19}$/.test(ans) && guild.roles.cache.has(ans)) {
+        selectedRoleId = ans;
+        break;
+      }
+    }
+
+    const approveCustomId = selectedRoleId 
+      ? `approve_${finalUserId}_${selectedRoleId}` 
+      : `approve_${finalUserId}`;
+
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`approve_${finalUserId}`)
+        .setCustomId(approveCustomId)
         .setLabel('Duyệt')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
@@ -267,17 +267,22 @@ app.post('/submit-form', async (req, res) => {
       .setTimestamp()
       .addFields({ name: 'Người gửi', value: displayUser });
 
-    for (const item of answers) {
+    const safeAnswers = answers.slice(0, 24);
+    for (const item of safeAnswers) {
       if (!item || typeof item.question !== 'string') continue;
+      
+      const qTitle = item.question.substring(0, 250);
+      const qAnswer = String(item.answer ?? 'N/A').substring(0, 1020);
+
       embed.addFields({
-        name: item.question,
-        value: String(item.answer ?? 'N/A'),
+        name: qTitle,
+        value: qAnswer || 'Chưa trả lời',
         inline: false
       });
     }
 
     await channel.send({ embeds: [embed], components: [row] });
-    console.log('✅ Gửi embed thành công!');
+    console.log('✅ Gửi đơn đăng ký thành công!');
 
     return res.status(200).json({ success: true, message: 'Đã gửi đơn thành công' });
   } catch (error) {
@@ -287,7 +292,7 @@ app.post('/submit-form', async (req, res) => {
 });
 
 if (!process.env.DISCORD_TOKEN) {
-  console.error('❌ DISCORD_TOKEN chưa được cấu hình. Hãy thêm biến môi trường vào .env hoặc hosting');
+  console.error('❌ DISCORD_TOKEN chưa được cấu hình.');
   process.exit(1);
 }
 
@@ -295,19 +300,15 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server đang chạy trên cổng ${PORT}`);
   console.log(`📡 Endpoint: POST http://localhost:${PORT}/submit-form`);
-  console.log('⏳ Đang đợi bot login...');
   client.login(process.env.DISCORD_TOKEN);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', async () => {
-  console.log('⏹️  Nhận tín hiệu SIGTERM, đang tắt...');
   await client.destroy();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.log('⏹️  Nhận tín hiệu SIGINT, đang tắt...');
   await client.destroy();
   process.exit(0);
 });
