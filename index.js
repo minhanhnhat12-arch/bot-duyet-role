@@ -101,19 +101,19 @@ client.on('interactionCreate', async (interaction) => {
 
       let rolesToAdd = [];
 
-      // CHỈ cấp 1 Role duy nhất nếu nút bấm có targetRoleId
-      if (targetRoleId && /^\d{17,19}$/.test(targetRoleId)) {
-        const matchedRole = await guild.roles.fetch(targetRoleId).catch(() => null);
-        if (matchedRole) {
-          rolesToAdd.push(matchedRole.id);
-        } else {
-          return interaction.followUp({
-            content: `❌ Role ID \`${targetRoleId}\` không tồn tại trong Server!`,
-            ephemeral: true
-          });
+      // Tách danh sách nhiều ID Role (phân cách bằng dấu '-') từ nút bấm
+      if (targetRoleId) {
+        const rawRoleIds = targetRoleId.split('-');
+        for (const rId of rawRoleIds) {
+          if (/^\d{17,19}$/.test(rId)) {
+            const matchedRole = await guild.roles.fetch(rId).catch(() => null);
+            if (matchedRole) rolesToAdd.push(matchedRole.id);
+          }
         }
-      } else {
-        // Dự phòng: Không tìm thấy Role nào từ Form mới lấy trong .env
+      }
+
+      // Dự phòng: Nếu không có Role nào từ Form mới lấy Role mặc định trong .env
+      if (rolesToAdd.length === 0) {
         rolesToAdd = parseRoleIds(process.env.ROLE_APPROVED_ID);
       }
 
@@ -135,7 +135,7 @@ client.on('interactionCreate', async (interaction) => {
       const formattedRoles = rolesToAdd.map(id => `<@&${id}>`).join(', ');
 
       await interaction.followUp({
-        content: `✅ Đã cấp Role (${formattedRoles}) cho <@${discordUserId}>!`,
+        content: `✅ Đã cấp các Role (${formattedRoles}) cho <@${discordUserId}>!`,
         ephemeral: true
       });
       return;
@@ -183,10 +183,6 @@ app.post('/submit-form', async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    // IN LOG ĐỂ KIỂM TRA DỮ LIỆU THỰC TẾ
-    console.log('📝 --- DỮ LIỆU CÂU TRẢ LỜI TỪ FORM ---');
-    console.log(JSON.stringify(answers, null, 2));
-
     const guild = await getGuild();
     if (!guild) {
       return res.status(500).json({ error: 'Không tìm thấy Guild' });
@@ -227,59 +223,48 @@ app.post('/submit-form', async (req, res) => {
     }
 
     const guildRoles = await guild.roles.fetch().catch(() => null);
-    let selectedRoleId = '';
+    let selectedRoleIds = [];
 
     if (guildRoles) {
       for (const item of answers) {
         const ans = String(item.answer || '').trim();
         if (!ans) continue;
 
-        // 1. Quét dãy số ID Role (17-19 chữ số)
-        const idMatches = ans.match(/\d{17,19}/g);
-        if (idMatches) {
-          for (const possibleId of idMatches) {
-            if (guildRoles.has(possibleId)) {
-              selectedRoleId = possibleId;
-              console.log(`🎯 Khớp Role theo ID: ${guildRoles.get(possibleId).name} (${selectedRoleId})`);
-              break;
+        // Tách câu trả lời thành từng phần nếu chọn nhiều lựa chọn (phân cách bằng dấu phẩy hoặc xuống dòng)
+        const answerParts = ans.split(/,|\n/).map(s => s.trim()).filter(Boolean);
+
+        for (const part of answerParts) {
+          // 1. Quét ID dãy số
+          const idMatches = part.match(/\d{17,19}/g);
+          if (idMatches) {
+            for (const possibleId of idMatches) {
+              if (guildRoles.has(possibleId) && !selectedRoleIds.includes(possibleId)) {
+                selectedRoleIds.push(possibleId);
+              }
             }
           }
-        }
-        if (selectedRoleId) break;
 
-        // 2. Quét theo Tên Role
-        const cleanAns = ans.toLowerCase();
-
-        // So sánh chính xác tên Role
-        let matchedByName = guildRoles.find(role => 
-          !role.managed && 
-          role.name !== '@everyone' && 
-          role.name.toLowerCase().trim() === cleanAns
-        );
-
-        // So sánh tương đối (chứa tên Role)
-        if (!matchedByName) {
-          matchedByName = guildRoles.find(role => 
+          // 2. Quét theo Tên Role
+          const cleanPart = part.toLowerCase();
+          const matchedByName = guildRoles.find(role => 
             !role.managed && 
             role.name !== '@everyone' && 
-            (cleanAns.includes(role.name.toLowerCase().trim()) || role.name.toLowerCase().trim().includes(cleanAns))
+            (role.name.toLowerCase().trim() === cleanPart || cleanPart.includes(role.name.toLowerCase().trim()))
           );
-        }
 
-        if (matchedByName) {
-          selectedRoleId = matchedByName.id;
-          console.log(`🎯 Khớp Role theo Tên: ${matchedByName.name} (${selectedRoleId})`);
-          break;
+          if (matchedByName && !selectedRoleIds.includes(matchedByName.id)) {
+            selectedRoleIds.push(matchedByName.id);
+          }
         }
       }
     }
 
-    if (!selectedRoleId) {
-      console.warn('📌 ID Role được tìm thấy từ Form: "Không có (Sử dụng mặc định)"');
-    }
+    console.log(`🎯 Các Role tìm thấy từ Form:`, selectedRoleIds);
 
-    const approveCustomId = selectedRoleId 
-      ? `approve_${finalUserId}_${selectedRoleId}` 
+    // Nối danh sách các Role ID bằng dấu "-" (đảm bảo không quá 100 ký tự giới hạn của Discord)
+    const roleString = selectedRoleIds.join('-');
+    const approveCustomId = roleString 
+      ? `approve_${finalUserId}_${roleString}`.substring(0, 100)
       : `approve_${finalUserId}`;
 
     const row = new ActionRowBuilder().addComponents(
