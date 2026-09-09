@@ -92,7 +92,6 @@ client.on('interactionCreate', async (interaction) => {
 
       let rolesToAdd = new Set();
 
-      // 1. Quét các ID Role (Quốc gia, BR, v.v.) được gửi qua từ Form
       if (targetRoleId) {
         const rawRoleIds = targetRoleId.split('-');
         for (const rId of rawRoleIds) {
@@ -100,7 +99,6 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // 2. Vẫn luôn giữ role dự phòng/mặc định (Nếu có cấu hình trong .env)
       const defaultRoles = parseRoleIds(process.env.ROLE_APPROVED_ID);
       for (const defaultId of defaultRoles) {
         rolesToAdd.add(defaultId);
@@ -204,8 +202,6 @@ app.post('/submit-form', async (req, res) => {
       }
     }
 
-    // ⚠️ LƯU Ý QUAN TRỌNG: Discord giới hạn dữ liệu gắn lên Nút Bấm tối đa 100 ký tự. 
-    // Do đó tui sẽ ghim TỐI ĐA 3 Role bóc từ Form lên nút (Dư sức cho Quốc Gia + BR + 1 role khác).
     const maxAllowedRoles = Array.from(selectedRoleIds).slice(0, 3);
     const roleString = maxAllowedRoles.join('-');
     const approveCustomId = roleString 
@@ -218,7 +214,7 @@ app.post('/submit-form', async (req, res) => {
     );
 
     const embed = new EmbedBuilder()
-      .setTitle('📋 ĐƠN ĐĂNG KÝ MỚI')
+      .setTitle(' ĐƠN ĐĂNG KÝ MỚI')
       .setColor(0x3498db)
       .setTimestamp()
       .addFields({ name: 'Người gửi', value: username ? `${username} (<@${finalUserId}>)` : `<@${finalUserId}>` });
@@ -238,4 +234,4 @@ app.post('/submit-form', async (req, res) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
-app.listen(process.env.PORT || 3000, () => console.log(`🚀 Server đang chạy!`));
+app.listen(process.env.PORT || 3000, () => console.log(` Server đang chạy!`));
